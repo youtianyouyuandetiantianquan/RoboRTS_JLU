@@ -6,11 +6,8 @@
 #include <math.h>
 #include <ros/ros.h>
 #include <ros/package.h>
-#include <image_transport/image_transport.h>
-#include <cv_bridge/cv_bridge.h>
-#include <sensor_msgs/image_encodings.h>
 #include "geometry_msgs/Twist.h"
-
+#include "opencv2/opencv.hpp"
 #include <opencv2/core/core.hpp>
 #include <opencv2/highgui/highgui.hpp>
 #include <opencv2/imgproc/imgproc.hpp>
@@ -20,149 +17,61 @@
 #include <stdio.h>
 #include <string.h>
 #include <ctype.h>
+#include <new>
 #include "KCFcpp/src/kcftracker.hpp"
-
 using namespace cv;
 using namespace std;
 static const std::string RGB_WINDOW = "RGB Image window";
-//static const std::string DEPTH_WINDOW = "DEPTH Image window";
-
-#define Max_linear_speed 1
-#define Min_linear_speed 0.4
-#define Min_distance 1.0
-#define Max_distance   5.0
-#define Max_rotation_speed 0.75
 
 float linear_speed = 0;
 float rotation_speed = 0;
 
-float k_linear_speed = (Max_linear_speed - Min_linear_speed) / (Max_distance - Min_distance);
-float h_linear_speed = Min_linear_speed - k_linear_speed * Min_distance;
-
-float k_rotation_speed = 0.004;
-float h_rotation_speed_left = 1.2;
-float h_rotation_speed_right = 1.36;
-
-float distance_scale = 1.0;
-int ERROR_OFFSET_X_left1 = 100;
-int ERROR_OFFSET_X_left2 = 300;
-int ERROR_OFFSET_X_right1 = 340;
-int ERROR_OFFSET_X_right2 = 600;
-int roi_height = 100;
-int roi_width = 100;
-cv::Mat rgbimage;
-cv::Mat depthimage;
+// 单位像素宽/高(cm/pixel)
+#define UNIT_PIXEL_W 0.0008234375
+#define UNIT_PIXEL_H 0.000825
+cv::Rect roi;
+int roi_width = 80;
+int roi_height = 150;
+int img_width = 640;
+int img_height = 480;
+int yawRate=0;
+cv::Mat frame;
+//HOGDescriptor hog(cvSize(64, 128), cvSize(16, 16), cvSize(8, 8), cvSize(8, 8), 9);
+cv::HOGDescriptor hog(cv::Size(64, 128), cv::Size(16, 16), cv::Size(8, 8), cv::Size(8, 8), 9, 1,-1, cv::HOGDescriptor::L2Hys, 0.2, true, cv::HOGDescriptor::DEFAULT_NLEVELS);
 cv::Rect selectRect;
 cv::Point origin;
-cv::Rect result;
-cv::Ptr<cv::ml::SVM> svm = cv::ml::SVM::create();
 bool select_flag = false;
 bool bRenewROI = false; // the flag to enable the implementation of KCF algorithm for the new chosen ROI
 bool bBeginKCF = false;
-bool enable_get_depth = false;
 
 bool HOG = true;
 bool FIXEDWINDOW = false;
 bool MULTISCALE = true;
-bool SILENT = true;
 bool LAB = false;
-bool has_dectect_people;
+bool has_dectect_people = false;
 // Create KCFTracker object
 KCFTracker tracker(HOG, FIXEDWINDOW, MULTISCALE, LAB);
 
-float dist_val[5];
-class ImageConverter
-{
-    ros::NodeHandle nh;
-    image_transport::ImageTransport it;
-    image_transport::Subscriber image_sub_;
-    image_transport::Subscriber depth_sub_;
-    HOGDescriptor hog;
 
-public:
-    ros::Publisher pub;
-    ImageConverter()
-    : it(nh)
-    { // Subscrive to input video feed and publish output video feed
-        image_sub_ = it.subscribe("/camera/image", 1, &ImageConverter::imageCb, this);
-        depth_sub_ = it.subscribe("/camera/depth/image", 1, &ImageConverter::depthCb, this);
-        pub = nh.advertise<geometry_msgs::Twist>("out_image_base_topic", 1000);
-        //pub = nh_.advertise<geometry_msgs::Twist>("/cmd_vel", 1000);
 
-        preparePeopleDetect();
-        cv::namedWindow(RGB_WINDOW);
-        //cv::namedWindow(DEPTH_WINDOW);
-    }
-
-    ~ImageConverter() {
-        cv::destroyWindow(RGB_WINDOW);
-        //cv::destroyWindow(DEPTH_WINDOW);
-    }
-
-    void imageCb(const sensor_msgs::ImageConstPtr& msg) {
-        cv_bridge::CvImagePtr cv_ptr; //申明一個CvImagePtr
-        try
-        {
-            cv_ptr = cv_bridge::toCvCopy(msg, sensor_msgs::image_encodings::BGR8);
-            
-        }
-        catch (cv_bridge::Exception &e) {
-            ROS_ERROR("cv_bridge exception: %s", e.what());
-            return;
-        }
-
-        //轉化爲opencv格式就可以對圖像進行操作
-        cv_ptr->image.copyTo(rgbimage);
-        peopleDetect();
-        if (has_dectect_people && !select_flag)
-        {
-            printf("has_dectect_people = true \n");
-            selectRect &= cv::Rect(0, 0, rgbimage.cols, rgbimage.rows);
-            bRenewROI = true;
-            select_flag = true;
-        }
-        //cv::setMouseCallback(RGB_WINDOW, onMouse, 0);
-        if (bRenewROI)
-        {
-//            if (selectRect.width <= 0 || selectRect.height <= 0) {
-//                bRenewROI = false;
-//                continue;
-//            }
-            tracker.init(selectRect, rgbimage);
-            bBeginKCF = true;
-            bRenewROI = false;
-            enable_get_depth = false;
-        }
-        if (bBeginKCF)
-        {
-            result = tracker.update(rgbimage);
-            cv::rectangle(rgbimage, result, cv::Scalar(0, 255, 0), 1, 8);
-            enable_get_depth = true;
-        }
-        else
-            cv::rectangle(rgbimage, selectRect, cv::Scalar(0, 255, 0), 2, 8, 0);
-        cv::imshow(RGB_WINDOW, rgbimage);
-        cv::waitKey(1);
-    }
      /*
     SVM训练完成后得到的XML文件里面，有一个数组，叫做support vector，还有一个数组，叫做alpha,有一个浮点数，叫做rho;
     将alpha矩阵同support vector相乘，注意，alpha*supportVector,将得到一个行向量，将该向量前面乘以-1。之后，再该行向量的最后添加一个元素rho。
     如此，变得到了一个分类器，利用该分类器，直接替换opencv中行人检测默认的那个分类器（cv::HOGDescriptor::setSVMDetector()），
     */
-
-    void preparePeopleDetect()
-    {
+void preparePeopleDetect()
+{
         ROS_INFO("SUCCESSFUL!!!!");
         has_dectect_people = false;
         int DescriptorDim;
-        //hog.setSVMDetector(HOGDescriptor::getDefaultPeopleDetector());
-        Ptr<cv::ml::SVM> svm = cv::ml::SVM::load("/home/kong/roborts_ws/src/RoboRTS/roborts_tracking/KCFcpp/src/12000neg_2400pos.xml");
+       // hog.setSVMDetector(HOGDescriptor::getDefaultPeopleDetector());
+        Ptr<cv::ml::SVM> svm = cv::ml::SVM::load("/home/kong/roborts_ws/src/RoboRTS/roborts_tracking/KCFcpp/src/SVM_HOG_2400PosINRIA_12000Neg_HardExample(误报少了漏检多了).xml");
+
         if(svm->empty())
         {
             cout<<"load svm detector failed!!!!"<<endl;
             return;
         }
-        DescriptorDim = svm->getVarCount();
         Mat svecsmat = svm->getSupportVectors();
         //特徵向量維數
         int svdim = svm->getVarCount();
@@ -185,8 +94,6 @@ public:
 
         vec.push_back(rho);
 
-
-
         //saving HOGDetectorForOpenCV.txt
         ofstream fout("HOGDetectorForOpenCV.txt");
         for (int i = 0; i < vec.size(); ++i)
@@ -196,15 +103,15 @@ public:
 
         hog.setSVMDetector(vec);
         printf("Start the tracking process\n");
-    } //行人检测
-    void peopleDetect()
-    {
+} //行人检测
+void peopleDetect()
+{
         if (has_dectect_people)
             return;
         vector<Rect> found, found_filtered;
         double t = (double) getTickCount();
         //多尺度檢測
-        hog.detectMultiScale(rgbimage, found, 0, Size(8, 8), Size(32, 32), 1.05, 2);
+        hog.detectMultiScale(frame, found, 0, Size(8, 8), Size(32, 32), 1.05, 2);
         t = (double) getTickCount() - t;
         printf("tdetection time = %gms\n", t*1000./cv::getTickFrequency());
         size_t i, j;
@@ -227,10 +134,13 @@ public:
             r.width = cvRound(r.width * 0.8);
             r.y += cvRound(r.height * 0.07);
             r.height = cvRound(r.height * 0.8);
-            //rectangle(rgbimage, r.tl(), r.br(), cv::Scalar(0,255,0), 3);
-            // printf("r.x==%d,y==%d,width==%d,height==%d\n",r.x,r.y,r.width,r.height);
+            rectangle(frame, r.tl(), r.br(), cv::Scalar(0,255,0), 3);
+            //printf("r.x==%d,y==%d,width==%d,height==%d\n",r.x,r.y,r.width,r.height);
+            //cv::rectangle(frame, r, cv::Scalar(0, 255, 0), 2, 8, 0);
+
         }
-        if (r.width > 100 && r.height > 350) {
+        if (r.width > 100 && r.height > 300) {
+            ROS_INFO("has dectect_people");
             has_dectect_people = true;
             selectRect.x = r.x + (r.width - roi_width) / 2;
             selectRect.y = r.y + (r.height - roi_height) / 2;
@@ -239,99 +149,86 @@ public:
             printf("selectRect.x==%d,y==%d,width==%d,height==%d\n", selectRect.x, selectRect.y,
                    selectRect.width, selectRect.height);
         }
-        //imshow(RGB_WINDOW, rgbimage);
-    }
-    void depthCb(const sensor_msgs::ImageConstPtr &msg)
+        //imshow(RGB_WINDOW, frame);
+}
+void imageCb(cv::Mat frame) {
+    int dx=0;
+    int dy=0;
+
+    int k = 1920/img_width;
+    peopleDetect();
+    if (has_dectect_people && !select_flag)
     {
-        cv_bridge::CvImagePtr cv_ptr;
-        try
-        {
-            cv_ptr = cv_bridge::toCvCopy(msg, sensor_msgs::image_encodings::TYPE_32FC1);
-            cv_ptr->image.copyTo(depthimage);
-        }
-        catch (cv_bridge::Exception &e)
-        {
-            ROS_ERROR("Could not convert from '%s' to 'TYPE_32FC1'.",
-                      msg->encoding.c_str());
-        }
-        if (enable_get_depth) {
-            dist_val[0] = depthimage.at<float>(result.y + result.height / 3,
-                                               result.x + result.width / 3);
-            dist_val[1] = depthimage.at<float>(result.y + result.height / 3,
-                                               result.x + 2 * result.width / 3);
-            dist_val[2] = depthimage.at<float>(result.y + 2 * result.height / 3,
-                                               result.x + result.width / 3);
-            dist_val[3] = depthimage.at<float>(result.y + 2 * result.height / 3,
-                                               result.x + 2 * result.width / 3);
-            dist_val[4] = depthimage.at<float>(result.y + result.height / 2,
-                                               result.x + result.width / 2);
-            float distance = 0;
-            int num_depth_points = 5;
-            for (int i = 0; i < 5; i++) {
-                if (dist_val[i] > 0.4 && dist_val[i] < 10.0)
-                    distance += dist_val[i];
-                else
-                    num_depth_points--;
-            }
-            distance /= num_depth_points;
-
-            //calculate linear speed
-            if (distance > Min_distance)
-                linear_speed = distance * k_linear_speed + h_linear_speed;
-            else if (distance <= Min_distance - 0.5) {
-                linear_speed = 0;
-                linear_speed =
-                        -1 * ((Min_distance - 0.5) * k_linear_speed + h_linear_speed);
-            } else {
-                linear_speed = 0;
-            }
-
-
-            if (fabs(linear_speed) > Max_linear_speed)
-                linear_speed = Max_linear_speed;
-
-            //calculate rotation speed
-            int center_x = result.x + result.width / 2;
-            if (center_x < ERROR_OFFSET_X_left1) {
-                printf("center_x <<<<<<<< ERROR_OFFSET_X_left1\n");
-                rotation_speed = Max_rotation_speed / 5;
-                has_dectect_people = false;
-                enable_get_depth = false;
-                select_flag = false;
-                bBeginKCF = false;
-            } else if (center_x > ERROR_OFFSET_X_left1 &&
-                       center_x < ERROR_OFFSET_X_left2)
-                rotation_speed = -k_rotation_speed * center_x + h_rotation_speed_left;
-            else if (center_x > ERROR_OFFSET_X_right1 &&
-                     center_x < ERROR_OFFSET_X_right2)
-                rotation_speed = -k_rotation_speed * center_x + h_rotation_speed_right;
-            else if (center_x > ERROR_OFFSET_X_right2) {
-                printf("center_x >>>>>>>> ERROR_OFFSET_X_right2\n");
-                rotation_speed = -Max_rotation_speed / 5;
-                has_dectect_people = false;
-                enable_get_depth = false;
-                select_flag = false;
-                bBeginKCF = false;
-            } else
-                rotation_speed = 0;
-            std::cout <<  "linear_speed = " << linear_speed << "  rotation_speed = " << rotation_speed << std::endl;
-            // std::cout <<  dist_val[0]  << " / " <<  dist_val[1] << " / " << dist_val[2] << " / " << dist_val[3] <<  " / " << dist_val[4] << std::endl;
-            // std::cout <<  "distance = " << distance << std::endl;
-        }
-        //cv::imshow(DEPTH_WINDOW, depthimage);
-        cv::waitKey(1);
+        printf("has_dectect_people = true \n");
+        selectRect &= cv::Rect(0, 0, frame.cols, frame.rows);
+        bRenewROI = true;
+        select_flag = true;
     }
-};
+    if (bRenewROI)
+    {
+        tracker.init(selectRect, frame);
+        bBeginKCF = true;
+        bRenewROI = false;
+    }
+    if (bBeginKCF)
+    {
+        roi = tracker.update(frame);
+        cv::rectangle(frame, roi, cv::Scalar(0, 255, 0), 1, 8);
+        dx = (int)(roi.x + roi.width/2  - img_width/2);
+        cv::circle(frame, Point(img_width/2, img_height/2), 5, cv::Scalar(255,0,0), 2, 8);
+        if(roi.width != 0)
+        {
+            cv::circle(frame, Point(roi.x + roi.width/2, roi.y + roi.height/2), 3, cv::Scalar(0,0,255), 1, 8);
+
+            cv::line(frame,  Point(img_width/2, img_height/2),
+                     Point(roi.x + roi.width/2, roi.y + roi.height/2),
+                     cv::Scalar(0,255,255));
+        }
+        yawRate = -dx;
+        if(abs(yawRate) < 10/k)
+        {
+            yawRate = 0;
+        }
+        else if(abs(yawRate)>500/k) {
+            yawRate = ((yawRate>0)?1:-1)*500/k;
+        }
+        rotation_speed = yawRate/180.*M_PI/160.*k;
+
+
+
+    }
+    else
+        cv::rectangle(frame, selectRect, cv::Scalar(0, 255, 0), 2, 8, 0);
+    cv::imshow(RGB_WINDOW, frame);
+    cv::waitKey(1);
+}
 int main(int argc, char** argv)
 {
-
     ros::init(argc, argv, "kcf_tracker");
-    ImageConverter ic;
+    ros::NodeHandle nh;
+    ros::Publisher pub;
+    pub = nh.advertise<geometry_msgs::Twist>("out_image_base_topic", 1000);
+    preparePeopleDetect();
+    cv::namedWindow(RGB_WINDOW);
+    cv::VideoCapture video(0);
 
+    video.set(CV_CAP_PROP_FRAME_WIDTH,img_width);
+    video.set(CV_CAP_PROP_FRAME_HEIGHT,img_height);
+    img_width = video.get(CV_CAP_PROP_FRAME_WIDTH);
+    img_height = video.get(CV_CAP_PROP_FRAME_HEIGHT);
+    if(!video.isOpened())
+    {
+        ROS_INFO("cannot read video!\n");
+        return -1;
+    }
     KCFTracker *tracker = NULL;
     while(ros::ok())
     {
 
+        if(video.read(frame))
+        {
+            imageCb(frame);
+        }
         ros::spinOnce();
         geometry_msgs::Twist twist;
         twist.linear.x = linear_speed;
@@ -340,9 +237,10 @@ int main(int argc, char** argv)
         twist.angular.x = 0;
         twist.angular.y = 0;
         twist.angular.z = rotation_speed;
-        ic.pub.publish(twist);
+        pub.publish(twist);
         if (cvWaitKey(33) == 'q')
             break;
     }
+    cv::destroyWindow(RGB_WINDOW);
     return 0;
 }
