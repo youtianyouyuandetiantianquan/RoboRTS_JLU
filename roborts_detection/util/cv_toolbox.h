@@ -53,6 +53,7 @@ class CVToolbox {
                                      20,
                                      boost::bind(&CVToolbox::ImageCallback, this, _1,_2));
 
+
     image_buffer_.resize(buffer_size);
     buffer_state_.resize(buffer_size);
     index_ = 0;

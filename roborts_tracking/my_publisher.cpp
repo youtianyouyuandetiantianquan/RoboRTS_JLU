@@ -3,7 +3,6 @@
 #include <opencv2/highgui/highgui.hpp>
 #include <cv_bridge/cv_bridge.h>
 #include <sstream> // for converting the command line parameter to integer
-
 int main(int argc, char** argv)
 {
     ros::init(argc, argv, "image_publisher");
@@ -33,6 +32,7 @@ int main(int argc, char** argv)
         {
             msg = cv_bridge::CvImage(std_msgs::Header(), "bgr8", frame).toImageMsg();
             pub.publish(msg);
+
             //cv::Wait(1);
         }
         ros::spinOnce();

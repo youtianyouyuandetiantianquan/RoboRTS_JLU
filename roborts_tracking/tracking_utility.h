@@ -7,8 +7,8 @@
  *  (at your option) any later version.
  *
  *  This program is distributed in the hope that it will be useful,
- *  but WITHOUT ANY WARRANTY; without even the implied warranty of 
- *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  *  GNU General Public License for more details.
  *
  *  You should have received a copy of the GNU General Public License
@@ -24,43 +24,45 @@
 class TrackingUtility
 {
 public:
-  TrackingUtility()
-          : P1(0,0),
-            P2(0,0),
-            roi(0,0,0,0),
-            mouseClicked(false),
-            roiSelected(false),
-            state(STATE_IDLE)
-  {
-  }
+    TrackingUtility()
+            : P1(0,0),
+              P2(0,0),
+              roi(0,0,0,0),
+              mouseClicked(false),
+              roiSelected(false),
+              state(STATE_IDLE)
+    {
+    }
 
-  typedef enum TrackingState
-  {
-    STATE_IDLE,
-    STATE_INIT,
-    STATE_ONGOING,
-    STATE_STOP
-  } TrackingState;
+    typedef enum TrackingState
+    {
+        STATE_IDLE,
+        STATE_INIT,
+        STATE_ONGOING,
+        STATE_STOP
+    } TrackingState;
 
-  static void mouseCallback(int event, int x, int y, int f, void *p);
+    static void mouseCallback(int event, int x, int y, int f, void *p);
 
-  cv::Point P1;
-  cv::Point P2;
-  bool mouseClicked;
-  cv::Rect roi;
+    cv::Point P1;
+    cv::Point P2;
+    bool mouseClicked;
+    cv::Rect roi;
+    int img_width;
+    int img_height;
 
-  /*!
-   * start_tracking is set true when you select a region and press 'g'
-   * is set to false when you press 's'
-   */
-  bool roiSelected;
-  TrackingState state;
-  TrackingState getState();
+    /*!
+     * start_tracking is set true when you select a region and press 'g'
+     * is set to false when you press 's'
+     */
+    bool roiSelected;
+    TrackingState state;
+    TrackingState getState();
 
-  void startTracker();
-  void stopTracker();
+    void startTracker();
+    void stopTracker();
 
-  cv::Rect getROI();
-  void getKey(char c);
+    cv::Rect getROI();
+    void getKey(char c);
 };
 #endif //TEST_TRACKING_UTILITY_H

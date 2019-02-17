@@ -22,7 +22,7 @@
 #include <chrono>
 #include <ros/ros.h>
 #include "roborts_msgs/GimbalAngle.h"
-
+#include "roborts_msgs/GimbalRate.h"
 #include "tracking_utility.h"
 
 #include "opencv2/imgproc/imgproc.hpp"

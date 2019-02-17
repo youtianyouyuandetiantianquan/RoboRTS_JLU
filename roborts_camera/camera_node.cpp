@@ -30,6 +30,7 @@ CameraNode::CameraNode() {
     auto camera_info = camera_param_.GetCameraParam()[i];
     nhs_.push_back(ros::NodeHandle(camera_info.camera_name));
     image_transport::ImageTransport it(nhs_.at(i));
+
     img_pubs_[i] = it.advertiseCamera("image_raw", 1, true);
     //create the selected camera driver
     camera_driver_[i] = roborts_common::AlgorithmFactory<CameraBase,CameraInfo>::CreateAlgorithm(camera_info.camera_type,camera_info);
